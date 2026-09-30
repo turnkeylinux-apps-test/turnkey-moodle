@@ -10,8 +10,8 @@ DB_PASS=$(mcookie)
 ADMIN_USER="admin"
 ADMIN_PASS=turnkey
 # You will need the commit corresponding to the desired version from https://github.com/moodle/moodle/tags
-# https://github.com/moodle/moodle/releases/tag/v5.2.3 ==> 
-MOODLE_COMMIT=344232c15336c71b80f9aca8359ce0e0a9f3d116
+# https://github.com/moodle/moodle/releases/tag/v4.0.5 => https://github.com/moodle/moodle/commit/fdbcfa1b153ee8b3cf863044f7b28f8b3b7a9500
+MOODLE_COMMIT=fdbcfa1b153ee8b3cf863044f7b28f8b3b7a9500
 
 # start mysql
 systemctl start mysql
