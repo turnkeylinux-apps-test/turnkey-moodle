@@ -1,6 +1,6 @@
-turnkey-moodle-19.0 (1) turnkey; urgency=low
+turnkey-moodle4-19.0 (1) turnkey; urgency=low
 
-  * Update Moodle to latest upstream; v5.2.2+.
+  * Moodle old release needed for testing; v4.0.5
 
   * Install Moodle via git clone (as per Moodle recommendation), 'moosh'
     removed.
