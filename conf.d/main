@@ -1,7 +1,8 @@
 #!/bin/bash -ex
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-02 17-05-39
 
 WEBROOT=/var/www/moodle
-DATAROOT=/var/www/moodledata
+DATAROOT=/var/moodledata
 
 DB_NAME=moodle
 DB_USER=moodle
@@ -9,7 +10,31 @@ DB_PASS=$(mcookie)
 
 ADMIN_USER="admin"
 ADMIN_PASS=turnkey
-MOODLE_COMMIT=b07dd04b40ece3b2d43b2e6ec1213db2a997df7f
+# Set the Moodle release (tag from https://github.com/moodle/moodle/tags,
+# without the leading "v"): the corresponding commit is resolved automatically.
+MOODLE_VERSION=5.3.0
+MOODLE_TAG="v${MOODLE_VERSION}"
+# Annotated tags: "^{}" is the dereferenced commit; lightweight tags have no
+# "^{}" entry, so fall back to the tag ref itself.
+MOODLE_COMMIT=$(git ls-remote --tags https://github.com/moodle/moodle.git \
+    "refs/tags/${MOODLE_TAG}^{}" | cut -f1)
+[ -n "$MOODLE_COMMIT" ] || MOODLE_COMMIT=$(git ls-remote --tags \
+    https://github.com/moodle/moodle.git "refs/tags/${MOODLE_TAG}" | cut -f1)
+[ -n "$MOODLE_COMMIT" ] || { echo "FATAL: tag $MOODLE_TAG not found" >&2; exit 1; }
+echo "Moodle $MOODLE_TAG => commit $MOODLE_COMMIT"
+
+# record the pinned release, so it can be checked later (e.g. by tests)
+cat > /etc/turnkey-moodle-release <<EOF
+MOODLE_VERSION=$MOODLE_VERSION
+MOODLE_TAG=$MOODLE_TAG
+MOODLE_COMMIT=$MOODLE_COMMIT
+EOF
+
+# Moodle < 5.1 has no "public/" directory: Apache must serve the webroot
+if dpkg --compare-versions "$MOODLE_VERSION" lt "5.1~"; then
+    sed -i "s|$WEBROOT/public/|$WEBROOT/|g" \
+        /etc/apache2/sites-available/moodle.conf
+fi
 
 # start mysql
 systemctl start mysql
@@ -103,3 +128,10 @@ EOF
 
 # stop mysql server
 systemctl stop  mysql
+
+# Harden permissions to production level "--harden".
+# In this mode, you cannot install plugins from the Moodle graphical interface,
+# but you have bullet proof permissions.
+# If you want to stay with “--semi-harden” to be able to install plugins
+# from the graphical interface, simply change the line below.
+tkl-set-moodle-perms --harden
