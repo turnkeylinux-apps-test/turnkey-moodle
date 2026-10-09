@@ -56,7 +56,7 @@ branch=$(echo "$MOODLE_VERSION" | \
     awk -F. '{printf "MOODLE_%d%02d_STABLE", $1, $2}')
 commit=$(git -C /var/www/moodle rev-parse HEAD)
 test "$commit" = "$MOODLE_COMMIT"
-# version.php must match the pinned release (e.g. "5.3.0 (Build: ...)")
+# version.php must match the pinned release (e.g. "5.3.1 (Build: ...)")
 test "${release%% *}" = "$MOODLE_VERSION"
 systemctl restart mariadb.service apache2.service
 curl "${curl_args[@]}" -L -b "$work/cookies" "$base/my/" \

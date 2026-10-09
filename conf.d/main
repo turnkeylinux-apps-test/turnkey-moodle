@@ -12,7 +12,7 @@ ADMIN_USER="admin"
 ADMIN_PASS=turnkey
 # Set the Moodle release (tag from https://github.com/moodle/moodle/tags,
 # without the leading "v"): the corresponding commit is resolved automatically.
-MOODLE_VERSION=5.3.0
+MOODLE_VERSION=5.3.1
 MOODLE_TAG="v${MOODLE_VERSION}"
 # Annotated tags: "^{}" is the dereferenced commit; lightweight tags have no
 # "^{}" entry, so fall back to the tag ref itself.
