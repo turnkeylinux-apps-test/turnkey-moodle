@@ -1,6 +1,7 @@
-turnkey-moodle-19.0 (1) turnkey; urgency=low
+turnkey-moodle40005tag-19.0 (1) turnkey; urgency=low
 
-  * Update Moodle to latest upstream; v5.2.2+.
+  * Install Moodle v4.0.5 (legacy 4.0 branch) on PHP 7.4 from sury.org
+    (lamp74, PHP_VERSION=7.4).
 
   * Install Moodle via git clone (as per Moodle recommendation), 'moosh'
     removed.

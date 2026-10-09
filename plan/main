@@ -1,17 +1,17 @@
 #include <turnkey/base>
-#include <turnkey/lamp>
+#include <turnkey/lamp74>
 
 python3-bcrypt      /* Moodle inithook to set admin password */
 
 libdbd-mysql-perl   /* moodle dep */
 libdbi-perl         /* moodle dep */
 php-mysql           /* moodle dep */
-php-cli             /* moodle dep */
-php-curl            /* moodle dep */
-php-gd              /* moodle dep */
-php-mbstring
-php-soap
-php-zip
+php7.4-cli          /* moodle dep */
+php7.4-curl         /* moodle dep */
+php7.4-gd           /* moodle dep */
+php7.4-mbstring
+php7.4-soap
+php7.4-zip
 ucf                 /* moodle dep */
 unzip               /* moodle dep */
 zip                 /* moodle dep */
@@ -19,7 +19,7 @@ aspell              /* moodle recommend */
 graphviz            /* moodle recommend */
 ghostscript         /* moodle recommend */
 poppler-utils       /* moodle recommend */
-php-xml
-php-xmlrpc          /* moodle recommend */
-php-intl            /* moodle recommend */
-php-ldap            /* moodle recommend */
+php7.4-xml
+php7.4-xmlrpc       /* moodle recommend */
+php7.4-intl         /* moodle recommend */
+php7.4-ldap         /* moodle recommend */
