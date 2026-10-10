@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+# v19.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 06-51-52
 
 result=${TKL_TEST_RESULT:?}
 password=${TKL_TEST_APP_PASS:?}
@@ -7,6 +8,14 @@ work=/run/tkl-v19-tests/moodle
 base=https://www.example.com
 curl_args=(-kfsS --resolve www.example.com:443:127.0.0.1)
 mkdir -p "$work"
+
+# installation paths and expected release, as recorded at build time
+. /etc/turnkey-moodle-release
+test -n "$MOODLE_PATH" && test -n "$MOODLE_DATA_PATH"
+
+# Moodle >= 5.1 serves public/, older releases MOODLE_PATH itself
+pubroot=$MOODLE_PATH
+[ -d "$pubroot/public" ] && pubroot=$pubroot/public
 
 systemctl --quiet is-active apache2.service
 systemctl --quiet is-active mariadb.service
@@ -29,22 +38,32 @@ grep -Eq '^HTTP/[^ ]+ 303([[:space:]]|$)' "$work/login.headers"
 curl "${curl_args[@]}" -L -b "$work/cookies" "$base/my/" >"$work/dashboard.html"
 grep -Eq 'login/logout\.php\?sesskey=[[:alnum:]]+' "$work/dashboard.html"
 
-runuser -u www-data -- test ! -w /var/www/moodle/public/index.php
-runuser -u www-data -- test ! -w /var/www/moodle/config.php
-runuser -u www-data -- test ! -w /var/www/moodle/theme
-runuser -u www-data -- touch /var/moodledata/.tkl-v19-write-test
-runuser -u www-data -- rm /var/moodledata/.tkl-v19-write-test
+runuser -u www-data -- test ! -w "$pubroot/index.php"
+runuser -u www-data -- test ! -w "$MOODLE_PATH/config.php"
+runuser -u www-data -- test ! -w "$MOODLE_PATH/theme"
+runuser -u www-data -- touch "$MOODLE_DATA_PATH/.tkl-v19-write-test"
+runuser -u www-data -- rm "$MOODLE_DATA_PATH/.tkl-v19-write-test"
 /usr/local/bin/tkl-set-moodle-perms --dry-run >"$work/perms-dry-run.txt"
 grep -Fq 'root-owned code' "$work/perms-dry-run.txt"
-test "$(runuser -u www-data -- php /var/www/moodle/admin/cli/cfg.php \
+test "$(runuser -u www-data -- php "$MOODLE_PATH/admin/cli/cfg.php" \
     --name=noreplyaddress --no-eol)" = noreply@example.com
-runuser -u www-data -- php /var/www/moodle/admin/cli/cron.php --keep-alive=0
+runuser -u www-data -- php "$MOODLE_PATH/admin/cli/cron.php" --keep-alive=0
 
-test "$(git -C /var/www/moodle rev-parse HEAD)" = \
-    b07dd04b40ece3b2d43b2e6ec1213db2a997df7f
 release=$(sed -n "s/^\$release *= *'\([^']*\)'.*/\1/p" \
-    /var/www/moodle/public/version.php)
+    "$pubroot/version.php")
 test -n "$release"
+# expected branch/commit (loaded above)
+test -n "$MOODLE_BRANCH" && test -n "$MOODLE_COMMIT"
+branch=$MOODLE_BRANCH
+commit=$(git -C "$MOODLE_PATH" rev-parse HEAD)
+test "$commit" = "$MOODLE_COMMIT"
+# local branch checked out and tracking the upstream stable branch
+test "$(git -C "$MOODLE_PATH" symbolic-ref --short HEAD)" = "$branch"
+test "$(git -C "$MOODLE_PATH" rev-parse --abbrev-ref '@{upstream}')" = \
+    "origin/$branch"
+# version.php must belong to the same branch (MOODLE_503_STABLE => '503')
+vbranch=$(sed -n "s/^\$branch *= *'\([0-9]*\)'.*/\1/p" "$pubroot/version.php")
+test "MOODLE_${vbranch}_STABLE" = "$branch"
 systemctl restart mariadb.service apache2.service
 curl "${curl_args[@]}" -L -b "$work/cookies" "$base/my/" \
     >"$work/dashboard-after-restart.html"
@@ -53,11 +72,11 @@ grep -Eq 'login/logout\.php\?sesskey=[[:alnum:]]+' \
 ! grep -F -- "$password" /var/log/inithooks.log
 
 cat >"$result" <<EOF
-package_source=official Moodle MOODLE_502_STABLE commit b07dd04b40ece3b2d43b2e6ec1213db2a997df7f
+package_source=official Moodle $branch branch (git clone) commit $commit
 installed_version=$release
 runtime_checks=Apache and MariaDB services, firstboot completion, HTTPS admin login, dashboard session across restart, cron, ownership helper and boundaries, password log hygiene
-updater_command=supervised Moodle git upgrade followed by tkl-set-moodle-perms --fix
+updater_command=supervised git pull on $branch followed by tkl-set-moodle-perms --fix
 updater_result=installed commit unchanged during QA
-updater_channel=official Moodle 5.2 stable branch
-integrity_evidence=installed Git HEAD b07dd04b40ece3b2d43b2e6ec1213db2a997df7f
+updater_channel=official Moodle $branch branch
+integrity_evidence=installed Git HEAD $commit on $branch tracking origin/$branch
 EOF

@@ -1,7 +1,12 @@
 #!/bin/bash -ex
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 07-59-16
+#
+# Moodle source code is obtained from Git as per "Git for Administrators":
+# https://docs.moodle.org/en/Git_for_Administrators
 
-WEBROOT=/var/www/moodle
-DATAROOT=/var/moodledata
+# installation paths: everything below refers to these variables only
+MOODLE_PATH=/var/www/moodle
+MOODLE_DATA_PATH=/var/moodledata
 
 DB_NAME=moodle
 DB_USER=moodle
@@ -9,18 +14,34 @@ DB_PASS=$(mcookie)
 
 ADMIN_USER="admin"
 ADMIN_PASS=turnkey
-# You will need the commit corresponding to the desired version from https://github.com/moodle/moodle/tags
-# https://github.com/moodle/moodle/releases/tag/v5.2.3 ==> 
-MOODLE_COMMIT=344232c15336c71b80f9aca8359ce0e0a9f3d116
+# Moodle stable branch to install and track
+# (list: https://github.com/moodle/moodle/branches)
+MOODLE_BRANCH=MOODLE_503_STABLE
+
+# Moodle version from the branch name:
+# MOODLE_503_STABLE => 5.3, MOODLE_405_STABLE => 4.5, MOODLE_39_STABLE => 3.9
+MOODLE_BRANCH_NUM=${MOODLE_BRANCH//[!0-9]/}
+if [ ${#MOODLE_BRANCH_NUM} -ge 3 ]; then
+    MOODLE_VERSION=$((10#$MOODLE_BRANCH_NUM / 100)).$((10#$MOODLE_BRANCH_NUM % 100))
+else
+    MOODLE_VERSION=$((MOODLE_BRANCH_NUM / 10)).$((MOODLE_BRANCH_NUM % 10))
+fi
+echo "Moodle branch $MOODLE_BRANCH => version $MOODLE_VERSION"
+
+# Moodle < 5.1 has no "public/" directory: Apache must serve the webroot
+if dpkg --compare-versions "$MOODLE_VERSION" lt "5.1~"; then
+    sed -i "s|$MOODLE_PATH/public/|$MOODLE_PATH/|g" \
+        /etc/apache2/sites-available/moodle.conf
+fi
 
 # start mysql
 systemctl start mysql
 
 # create database
-mysqladmin create $DB_NAME
+mysqladmin --skip-ssl create $DB_NAME
 
 # create database user with privileges on the database
-MYSQL_BATCH="mysql --batch --execute"
+MYSQL_BATCH="mysql --skip-ssl --batch --execute"
 $MYSQL_BATCH "grant all privileges on $DB_NAME.* to $DB_USER@localhost identified by '$DB_PASS';"
 $MYSQL_BATCH "flush privileges;"
 
@@ -30,18 +51,40 @@ a2ensite moodle
 a2enmod rewrite
 a2enmod headers
 
-git init "$WEBROOT"
-git -C "$WEBROOT" remote add origin https://github.com/moodle/moodle.git
-git -C "$WEBROOT" fetch --depth 1 origin "$MOODLE_COMMIT"
-git -C "$WEBROOT" checkout --detach "$MOODLE_COMMIT"
-test "$(git -C "$WEBROOT" rev-parse HEAD)" = "$MOODLE_COMMIT"
+# get the code from Git exactly as per Moodle docs
+# https://docs.moodle.org/en/Git_for_Administrators
+# NOTE: the git:// protocol uses TCP port 9418, which is often blocked by
+# firewalls. If the clone fails with "Connection refused" or a timeout, use
+# the official HTTPS mirror suggested by the same docs instead:
+#   git clone https://github.com/moodle/moodle.git
+# abort the build if MOODLE_PATH already exists, then clone into it
+if [ -e "$MOODLE_PATH" ]; then
+    echo "FATAL: $MOODLE_PATH already exists" >&2
+    exit 1
+fi
+git clone git://git.moodle.org/moodle.git "$MOODLE_PATH"
+cd "$MOODLE_PATH"
+git branch -a
+git branch --track "$MOODLE_BRANCH" "origin/$MOODLE_BRANCH"
+git checkout "$MOODLE_BRANCH"
+MOODLE_COMMIT=$(git rev-parse HEAD)
+echo "Moodle $MOODLE_BRANCH => commit $MOODLE_COMMIT"
 
-cd $WEBROOT
+# record the installed branch/commit, so it can be checked later (e.g. by tests)
+cat > /etc/turnkey-moodle-release <<EOF
+MOODLE_PATH=$MOODLE_PATH
+MOODLE_DATA_PATH=$MOODLE_DATA_PATH
+MOODLE_BRANCH=$MOODLE_BRANCH
+MOODLE_VERSION=$MOODLE_VERSION
+MOODLE_COMMIT=$MOODLE_COMMIT
+EOF
+
+cd "$MOODLE_PATH"
 php admin/cli/install.php \
     --chmod=750 \
     --lang=en \
     --wwwroot="http://127.0.0.1" \
-    --dataroot=$DATAROOT \
+    --dataroot=$MOODLE_DATA_PATH \
     --dbtype=mariadb \
     --dbhost=localhost \
     --dbname=$DB_NAME \
@@ -59,25 +102,25 @@ php admin/cli/install.php \
 
 # Executable Moodle and theme/plugin code is root-owned. Only Moodle's data
 # directory remains writable by the web service.
-chown -R root:root "$WEBROOT"
-find "$WEBROOT" -type d -exec chmod 0755 {} +
-find "$WEBROOT" -type f -exec chmod 0644 {} +
-chown root:www-data "$WEBROOT/config.php"
-chmod 0640 "$WEBROOT/config.php"
-chown -R www-data:www-data "$DATAROOT"
-find "$DATAROOT" -type d -exec chmod 0750 {} +
-find "$DATAROOT" -type f -exec chmod 0640 {} +
+chown -R root:root "$MOODLE_PATH"
+find "$MOODLE_PATH" -type d -exec chmod 0755 {} +
+find "$MOODLE_PATH" -type f -exec chmod 0644 {} +
+chown root:www-data "$MOODLE_PATH/config.php"
+chmod 0640 "$MOODLE_PATH/config.php"
+chown -R www-data:www-data "$MOODLE_DATA_PATH"
+find "$MOODLE_DATA_PATH" -type d -exec chmod 0750 {} +
+find "$MOODLE_DATA_PATH" -type f -exec chmod 0640 {} +
 
 ## tweak config
 
 # configure moodle to use dynamic hostname and ssl (webroot)
-sed -i "s|\$CFG->wwwroot \(.*\)|\$protocol='http://';\n\$hostname='127.0.0.1';\nif (isset(\$_SERVER['HTTPS'])) { \$protocol='https://'; }\nif (isset(\$_SERVER['HTTP_HOST'])) { \$hostname=\$_SERVER['HTTP_HOST']; }\n\$CFG->wwwroot = \$protocol.\$hostname;\n|" $WEBROOT/config.php
+sed -i "s|\$CFG->wwwroot \(.*\)|\$protocol='http://';\n\$hostname='127.0.0.1';\nif (isset(\$_SERVER['HTTPS'])) { \$protocol='https://'; }\nif (isset(\$_SERVER['HTTP_HOST'])) { \$hostname=\$_SERVER['HTTP_HOST']; }\n\$CFG->wwwroot = \$protocol.\$hostname;\n|" $MOODLE_PATH/config.php
 
 # prevent setting of executable paths via Admin UI (locks down possible privilege escalation)
-sed -i "/'admin';$/ a \$CFG->preventexecpath = true;" $WEBROOT/config.php
+sed -i "/'admin';$/ a \$CFG->preventexecpath = true;" $MOODLE_PATH/config.php
 
 # set paths to utils
-mysql <<EOF
+mysql --skip-ssl <<EOF
 USE $DB_NAME;
 UPDATE config SET value = '1' WHERE name = 'loginhttps';
 UPDATE config SET value = '127.0.0.1' WHERE name = 'smtphosts';
@@ -98,7 +141,7 @@ runuser -u www-data -- php admin/cli/cfg.php \
 
 # disable user delete - removes hyped up "critical" warning
 # - see https://tracker.moodle.org/browse/MDL-67852 for more info
-mysql <<EOF
+mysql --skip-ssl <<EOF
 USE $DB_NAME;
 DELETE FROM role_capabilities WHERE capability = "tool/dataprivacy:requestdelete";
 EOF
@@ -111,4 +154,4 @@ systemctl stop  mysql
 # but you have bullet proof permissions.
 # If you want to stay with “--semi-harden” to be able to install plugins
 # from the graphical interface, simply change the line below.
-tkl-set-moodle-perms --harden
+tkl-set-moodle-perms --harden -mp "$MOODLE_PATH" -md "$MOODLE_DATA_PATH"

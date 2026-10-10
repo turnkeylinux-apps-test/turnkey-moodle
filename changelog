@@ -1,6 +1,27 @@
 turnkey-moodle-19.0 (1) turnkey; urgency=low
 
-  * Update Moodle to latest upstream; v5.2.2+.
+  * Update Moodle to latest upstream; MOODLE_503_STABLE (5.3+).
+
+  * Moodle source code obtained exactly as per Moodle docs "Git for
+    Administrators" (https://docs.moodle.org/en/Git_for_Administrators):
+    git clone from git://git.moodle.org/moodle.git, with a local stable
+    branch tracking origin, so the site can later be updated with "git pull".
+
+  * Installation paths parametrized (MOODLE_PATH, MOODLE_DATA_PATH); the
+    build aborts if MOODLE_PATH already exists before cloning.
+
+  * Apache vhost adapted automatically to the Moodle release: Moodle >= 5.1
+    serves 'public/', older releases serve MOODLE_PATH itself.
+
+  * Installation paths, release and commit recorded at build time in
+    /etc/turnkey-moodle-release; the QA test checks the installed code
+    against it (no hardcoded commit or paths).
+
+  * Build-time MariaDB client calls use --skip-ssl (local unix socket only),
+    avoiding "certificate is not yet valid" TLS errors with MariaDB 11.x.
+
+  * tkl-set-moodle-perms called with the parametrized paths (-mp/-md) at
+    build time.
 
   * Install Moodle via git clone (as per Moodle recommendation), 'moosh'
     removed.
