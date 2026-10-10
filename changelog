@@ -1,4 +1,8 @@
-turnkey-moodle-19.0 (1) turnkey; urgency=low
+turnkey-moodle53-beta-19.0 (1) turnkey; urgency=low
+
+  * Appliance name set to 'moodle53-beta' (lowercase letters, digits and hyphens
+    only), as required by buildtasks (iso-release, bt-container,
+    parse-appname-version). 'beta': personal build, not an official release.
 
   * Update Moodle to latest upstream; MOODLE_503_STABLE (5.3+).
 
