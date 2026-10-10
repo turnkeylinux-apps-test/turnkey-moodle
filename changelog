@@ -1,7 +1,50 @@
-turnkey-moodle40005tag-19.0 (1) turnkey; urgency=low
+turnkey-moodle-v4.0.5-upgradable-19.0 (1) turnkey; urgency=low
 
-  * Install Moodle v4.0.5 (legacy 4.0 branch) on PHP 7.4 from sury.org
+  * Install Moodle v4.0.5 (legacy 4.0 branch), pinned to tag v4.0.5 on a
+    local MOODLE_400_STABLE branch tracking origin. PHP 7.4 from sury.org
     (lamp74, PHP_VERSION=7.4).
+
+  * Upgradable: independent upgrade helpers next to tkl-set-moodle-perms;
+    they never call each other, they are run one at a time in the order given
+    in UPGRADE.md:
+    - tkl-lamp74-to-lamp81: PHP 7.4 -> PHP 8.1 (sury.org); stops if the
+      installed Moodle does not support PHP 8.1 (older than 4.1).
+    - tkl-lamp81-to-lamp: PHP 8.1 -> Debian default PHP, sury.org disabled;
+      stops if the installed Moodle cannot reach MOODLE_503_STABLE (the
+      Moodle to arrive at, supporting the Debian PHP), i.e. older than 4.4.
+    - tkl-moodle-upgrade [MOODLE_xxx_STABLE]: Moodle upgrade with Git as per
+      "Git for Administrators" (git pull, or git branch --track + checkout),
+      after checking PHP and upgrade-path compatibility; handles permissions,
+      the public/ vhost (5.1+) and admin/cli/upgrade.php. Maintenance mode is
+      left to the administrator (see UPGRADE.md).
+    The PHP helpers install the equivalent packages, move Apache and the CLI
+    to the new PHP, carry over the php.ini settings and purge every other
+    PHP version.
+
+  * tkl-set-moodle-perms called with the parametrized paths (-mp/-md) at
+    build time.
+
+  * Use php7.4-mysql instead of php-mysql: on Debian 13/Trixie TurnKey no
+    longer builds the dummy php-mysql package, so php-mysql pulled in the
+    Debian php8.4-mysql.
+
+  * Moodle source code obtained exactly as per Moodle docs "Git for
+    Administrators" (https://docs.moodle.org/en/Git_for_Administrators):
+    git clone from git://git.moodle.org/moodle.git, with a local stable
+    branch tracking origin, so the site can later be updated with "git pull".
+
+  * Installation paths parametrized (MOODLE_PATH, MOODLE_DATA_PATH); the
+    build aborts if MOODLE_PATH already exists before cloning.
+
+  * Apache vhost adapted automatically to the Moodle release: Moodle >= 5.1
+    serves 'public/', older releases serve MOODLE_PATH itself.
+
+  * Installation paths, release and commit recorded at build time in
+    /etc/turnkey-moodle-release; the QA test checks the installed code
+    against it (no hardcoded commit or paths).
+
+  * Build-time MariaDB client calls use --skip-ssl (local unix socket only),
+    avoiding "certificate is not yet valid" TLS errors with MariaDB 11.x.
 
   * Install Moodle via git clone (as per Moodle recommendation), 'moosh'
     removed.

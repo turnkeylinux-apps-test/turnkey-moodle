@@ -1,8 +1,12 @@
 #!/bin/bash -ex
-# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-02 17-23-16
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 12-54-27
+#
+# Moodle source code is obtained from Git as per "Git for Administrators":
+# https://docs.moodle.org/en/Git_for_Administrators
 
-WEBROOT=/var/www/moodle
-DATAROOT=/var/moodledata
+# installation paths: everything below refers to these variables only
+MOODLE_PATH=/var/www/moodle
+MOODLE_DATA_PATH=/var/moodledata
 
 DB_NAME=moodle
 DB_USER=moodle
@@ -10,29 +14,24 @@ DB_PASS=$(mcookie)
 
 ADMIN_USER="admin"
 ADMIN_PASS=turnkey
-# Set the Moodle release (tag from https://github.com/moodle/moodle/tags,
-# without the leading "v"): the corresponding commit is resolved automatically.
+# Exact Moodle release to install: a tag listed at
+# https://github.com/moodle/moodle/tags (without the leading "v").
+# The stable branch the release belongs to is derived from it:
+# 4.0.5 => MOODLE_400_STABLE, 3.9.25 => MOODLE_39_STABLE
 MOODLE_VERSION=4.0.5
 MOODLE_TAG="v${MOODLE_VERSION}"
-# Annotated tags: "^{}" is the dereferenced commit; lightweight tags have no
-# "^{}" entry, so fall back to the tag ref itself.
-MOODLE_COMMIT=$(git ls-remote --tags https://github.com/moodle/moodle.git \
-    "refs/tags/${MOODLE_TAG}^{}" | cut -f1)
-[ -n "$MOODLE_COMMIT" ] || MOODLE_COMMIT=$(git ls-remote --tags \
-    https://github.com/moodle/moodle.git "refs/tags/${MOODLE_TAG}" | cut -f1)
-[ -n "$MOODLE_COMMIT" ] || { echo "FATAL: tag $MOODLE_TAG not found" >&2; exit 1; }
-echo "Moodle $MOODLE_TAG => commit $MOODLE_COMMIT"
-
-# record the pinned release, so it can be checked later (e.g. by tests)
-cat > /etc/turnkey-moodle-release <<EOF
-MOODLE_VERSION=$MOODLE_VERSION
-MOODLE_TAG=$MOODLE_TAG
-MOODLE_COMMIT=$MOODLE_COMMIT
-EOF
+MOODLE_MAJOR=${MOODLE_VERSION%%.*}
+MOODLE_MINOR=${MOODLE_VERSION#*.}; MOODLE_MINOR=${MOODLE_MINOR%%.*}
+if [ "$MOODLE_MAJOR" -ge 4 ]; then
+    MOODLE_BRANCH=$(printf 'MOODLE_%d%02d_STABLE' "$MOODLE_MAJOR" "$MOODLE_MINOR")
+else
+    MOODLE_BRANCH="MOODLE_${MOODLE_MAJOR}${MOODLE_MINOR}_STABLE"
+fi
+echo "Moodle $MOODLE_TAG => branch $MOODLE_BRANCH"
 
 # Moodle < 5.1 has no "public/" directory: Apache must serve the webroot
 if dpkg --compare-versions "$MOODLE_VERSION" lt "5.1~"; then
-    sed -i "s|$WEBROOT/public/|$WEBROOT/|g" \
+    sed -i "s|$MOODLE_PATH/public/|$MOODLE_PATH/|g" \
         /etc/apache2/sites-available/moodle.conf
 fi
 
@@ -40,10 +39,10 @@ fi
 systemctl start mysql
 
 # create database
-mysqladmin create $DB_NAME
+mysqladmin --skip-ssl create $DB_NAME
 
 # create database user with privileges on the database
-MYSQL_BATCH="mysql --batch --execute"
+MYSQL_BATCH="mysql --skip-ssl --batch --execute"
 $MYSQL_BATCH "grant all privileges on $DB_NAME.* to $DB_USER@localhost identified by '$DB_PASS';"
 $MYSQL_BATCH "flush privileges;"
 
@@ -53,18 +52,47 @@ a2ensite moodle
 a2enmod rewrite
 a2enmod headers
 
-git init "$WEBROOT"
-git -C "$WEBROOT" remote add origin https://github.com/moodle/moodle.git
-git -C "$WEBROOT" fetch --depth 1 origin "$MOODLE_COMMIT"
-git -C "$WEBROOT" checkout --detach "$MOODLE_COMMIT"
-test "$(git -C "$WEBROOT" rev-parse HEAD)" = "$MOODLE_COMMIT"
+# get the code from Git exactly as per Moodle docs, then pin the release tag
+# https://docs.moodle.org/en/Git_for_Administrators
+# NOTE: the git:// protocol uses TCP port 9418, which is often blocked by
+# firewalls. If the clone fails with "Connection refused" or a timeout, use
+# the official HTTPS mirror suggested by the same docs instead:
+#   git clone https://github.com/moodle/moodle.git
+# abort the build if MOODLE_PATH already exists, then clone into it
+if [ -e "$MOODLE_PATH" ]; then
+    echo "FATAL: $MOODLE_PATH already exists" >&2
+    exit 1
+fi
+git clone git://git.moodle.org/moodle.git "$MOODLE_PATH"
+cd "$MOODLE_PATH"
+# --no-pager: on a terminal "git branch" would wait in the pager (less)
+git --no-pager branch -a
+git branch --track "$MOODLE_BRANCH" "origin/$MOODLE_BRANCH"
+git checkout "$MOODLE_BRANCH"
+# pin the local branch to the exact release tag: the branch still tracks
+# origin/$MOODLE_BRANCH, so a later "git pull" upgrades within the branch
+git merge-base --is-ancestor "$MOODLE_TAG" "origin/$MOODLE_BRANCH"
+git reset --hard "$MOODLE_TAG"
+MOODLE_COMMIT=$(git rev-parse HEAD)
+test "$MOODLE_COMMIT" = "$(git rev-parse "${MOODLE_TAG}^{commit}")"
+echo "Moodle $MOODLE_TAG ($MOODLE_BRANCH) => commit $MOODLE_COMMIT"
 
-cd $WEBROOT
+# record the installed branch/commit, so it can be checked later (e.g. by tests)
+cat > /etc/turnkey-moodle-release <<EOF
+MOODLE_PATH=$MOODLE_PATH
+MOODLE_DATA_PATH=$MOODLE_DATA_PATH
+MOODLE_VERSION=$MOODLE_VERSION
+MOODLE_TAG=$MOODLE_TAG
+MOODLE_BRANCH=$MOODLE_BRANCH
+MOODLE_COMMIT=$MOODLE_COMMIT
+EOF
+
+cd "$MOODLE_PATH"
 php admin/cli/install.php \
     --chmod=750 \
     --lang=en \
     --wwwroot="http://127.0.0.1" \
-    --dataroot=$DATAROOT \
+    --dataroot=$MOODLE_DATA_PATH \
     --dbtype=mariadb \
     --dbhost=localhost \
     --dbname=$DB_NAME \
@@ -82,25 +110,25 @@ php admin/cli/install.php \
 
 # Executable Moodle and theme/plugin code is root-owned. Only Moodle's data
 # directory remains writable by the web service.
-chown -R root:root "$WEBROOT"
-find "$WEBROOT" -type d -exec chmod 0755 {} +
-find "$WEBROOT" -type f -exec chmod 0644 {} +
-chown root:www-data "$WEBROOT/config.php"
-chmod 0640 "$WEBROOT/config.php"
-chown -R www-data:www-data "$DATAROOT"
-find "$DATAROOT" -type d -exec chmod 0750 {} +
-find "$DATAROOT" -type f -exec chmod 0640 {} +
+chown -R root:root "$MOODLE_PATH"
+find "$MOODLE_PATH" -type d -exec chmod 0755 {} +
+find "$MOODLE_PATH" -type f -exec chmod 0644 {} +
+chown root:www-data "$MOODLE_PATH/config.php"
+chmod 0640 "$MOODLE_PATH/config.php"
+chown -R www-data:www-data "$MOODLE_DATA_PATH"
+find "$MOODLE_DATA_PATH" -type d -exec chmod 0750 {} +
+find "$MOODLE_DATA_PATH" -type f -exec chmod 0640 {} +
 
 ## tweak config
 
 # configure moodle to use dynamic hostname and ssl (webroot)
-sed -i "s|\$CFG->wwwroot \(.*\)|\$protocol='http://';\n\$hostname='127.0.0.1';\nif (isset(\$_SERVER['HTTPS'])) { \$protocol='https://'; }\nif (isset(\$_SERVER['HTTP_HOST'])) { \$hostname=\$_SERVER['HTTP_HOST']; }\n\$CFG->wwwroot = \$protocol.\$hostname;\n|" $WEBROOT/config.php
+sed -i "s|\$CFG->wwwroot \(.*\)|\$protocol='http://';\n\$hostname='127.0.0.1';\nif (isset(\$_SERVER['HTTPS'])) { \$protocol='https://'; }\nif (isset(\$_SERVER['HTTP_HOST'])) { \$hostname=\$_SERVER['HTTP_HOST']; }\n\$CFG->wwwroot = \$protocol.\$hostname;\n|" $MOODLE_PATH/config.php
 
 # prevent setting of executable paths via Admin UI (locks down possible privilege escalation)
-sed -i "/'admin';$/ a \$CFG->preventexecpath = true;" $WEBROOT/config.php
+sed -i "/'admin';$/ a \$CFG->preventexecpath = true;" $MOODLE_PATH/config.php
 
 # set paths to utils
-mysql <<EOF
+mysql --skip-ssl <<EOF
 USE $DB_NAME;
 UPDATE config SET value = '1' WHERE name = 'loginhttps';
 UPDATE config SET value = '127.0.0.1' WHERE name = 'smtphosts';
@@ -121,7 +149,7 @@ runuser -u www-data -- php admin/cli/cfg.php \
 
 # disable user delete - removes hyped up "critical" warning
 # - see https://tracker.moodle.org/browse/MDL-67852 for more info
-mysql <<EOF
+mysql --skip-ssl <<EOF
 USE $DB_NAME;
 DELETE FROM role_capabilities WHERE capability = "tool/dataprivacy:requestdelete";
 EOF
@@ -134,4 +162,4 @@ systemctl stop  mysql
 # but you have bullet proof permissions.
 # If you want to stay with “--semi-harden” to be able to install plugins
 # from the graphical interface, simply change the line below.
-tkl-set-moodle-perms --harden
+tkl-set-moodle-perms --harden -mp "$MOODLE_PATH" -md "$MOODLE_DATA_PATH"

@@ -1,0 +1,201 @@
+#!/bin/bash
+# tkl-moodle-upgrade by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.2 - 2026-10-10 07-51-13
+#
+# Upgrade the Moodle code of a TurnKey Moodle appliance with Git, as per
+# "Git for Administrators": https://docs.moodle.org/en/Git_for_Administrators
+#
+#   tkl-moodle-upgrade                      update within the current branch
+#                                           (git pull)
+#   tkl-moodle-upgrade MOODLE_xxx_STABLE    move to a newer stable branch
+#                                           (git branch --track + git checkout)
+#
+# Steps: Git update, file permissions (tkl-set-moodle-perms), Apache vhost
+# moved to 'public/' when reaching Moodle 5.1+, database upgrade
+# (admin/cli/upgrade.php), Apache restart.
+# Maintenance mode is NOT handled here: enable it before and disable it after
+# (admin/cli/maintenance.php --enable / --disable).
+#
+# Before touching anything it checks, from Moodle's own environment.xml data,
+# that the target branch supports the installed PHP version and can be
+# reached from the installed Moodle release. PHP itself is never changed here.
+
+set -euo pipefail
+
+# branch  php_min  php_max (first unsupported, - = none)  upgrade_from_min
+# source: admin/environment.xml (MOODLE_503_STABLE)
+COMPAT_TABLE='
+400 7.3 8.1 3.6
+401 7.4 8.2 3.9
+402 8.0 8.3 3.11.8
+403 8.0 8.3 3.11.8
+404 8.1 8.4 4.1.2
+405 8.1 8.4 4.1.2
+500 8.2 -   4.2.3
+501 8.2 -   4.2.3
+502 8.3 -   4.4
+503 8.3 -   4.4
+'
+
+ASSUME_YES=no
+FORCE=no
+PERMS_MODE=--harden
+TARGET=
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [MOODLE_xxx_STABLE]
+
+Upgrade Moodle with Git as per "Git for Administrators".
+Without a branch: update within the current branch (git pull).
+With a branch:    move to that (newer) stable branch.
+
+  -y,  --yes           do not ask for confirmation
+  -sh, --semi-harden   apply the semi-hardened permission model instead of
+                       the hardened one (allows plugin install from the UI)
+       --force         skip the PHP / upgrade-path compatibility checks
+  -h,  --help          show this help
+EOF
+}
+
+info()  { echo "==> $*"; }
+warn()  { echo "WARNING: $*" >&2; }
+fatal() { echo "FATAL: $*" >&2; exit 1; }
+
+compat() {  # compat BRANCH FIELD(2=php_min 3=php_max 4=from_min)
+    echo "$COMPAT_TABLE" | awk -v b="$1" -v f="$2" '$1==b {print $f}'
+}
+
+branch_num() {  # MOODLE_405_STABLE -> 405
+    echo "$1" | sed -n 's/^MOODLE_\([0-9]\+\)_STABLE$/\1/p'
+}
+
+# --- arguments ---------------------------------------------------------------
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes)          ASSUME_YES=yes ;;
+        -sh|--semi-harden) PERMS_MODE=--semi-harden ;;
+        --force)           FORCE=yes ;;
+        -h|--help)         usage; exit 0 ;;
+        MOODLE_*_STABLE)   TARGET=$1 ;;
+        *) usage >&2; exit 1 ;;
+    esac
+    shift
+done
+
+[ "$(id -u)" -eq 0 ] || fatal "must be run as root"
+
+# --- paths -------------------------------------------------------------------
+MOODLE_PATH=
+MOODLE_DATA_PATH=
+if [ -r /etc/turnkey-moodle-release ]; then
+    MOODLE_PATH=$(sed -n 's/^MOODLE_PATH=//p' /etc/turnkey-moodle-release)
+    MOODLE_DATA_PATH=$(sed -n 's/^MOODLE_DATA_PATH=//p' /etc/turnkey-moodle-release)
+fi
+MOODLE_PATH=${MOODLE_PATH:-/var/www/moodle}
+if [ -z "$MOODLE_DATA_PATH" ]; then
+    MOODLE_DATA_PATH=$(sed -n "s/^\$CFG->dataroot *= *'\(.*\)';.*/\1/p" \
+                       "$MOODLE_PATH/config.php")
+fi
+[ -d "$MOODLE_PATH/.git" ] || fatal "$MOODLE_PATH is not a Git checkout"
+[ -d "$MOODLE_DATA_PATH" ] || fatal "Moodle data path not found"
+
+version_php() {
+    if [ -f "$MOODLE_PATH/public/version.php" ]; then
+        echo "$MOODLE_PATH/public/version.php"
+    else
+        echo "$MOODLE_PATH/version.php"
+    fi
+}
+
+cd "$MOODLE_PATH"
+
+CUR_BRANCH_NUM=$(sed -n "s/^\$branch *= *'\([0-9]*\)'.*/\1/p" "$(version_php)")
+CUR_RELEASE=$(sed -n "s/^\$release *= *'\([0-9.]*\).*/\1/p" "$(version_php)")
+CUR_GIT_BRANCH=$(git symbolic-ref --short -q HEAD || true)
+PHP_V=$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')
+info "Moodle $CUR_RELEASE (branch $CUR_BRANCH_NUM, Git ${CUR_GIT_BRANCH:-detached}) in $MOODLE_PATH, PHP $PHP_V"
+
+if [ -z "$TARGET" ]; then
+    [ -n "$CUR_GIT_BRANCH" ] || fatal "detached HEAD: give a MOODLE_xxx_STABLE branch"
+    TARGET=$CUR_GIT_BRANCH
+fi
+TARGET_NUM=$(branch_num "$TARGET")
+[ -n "$TARGET_NUM" ] || fatal "invalid branch name: $TARGET"
+
+# --- checks ------------------------------------------------------------------
+[ "$TARGET_NUM" -ge "$CUR_BRANCH_NUM" ] \
+    || fatal "$TARGET is older than the installed Moodle: downgrades are not supported"
+
+if [ "$FORCE" != yes ]; then
+    php_min=$(compat "$TARGET_NUM" 2)
+    php_max=$(compat "$TARGET_NUM" 3)
+    from_min=$(compat "$TARGET_NUM" 4)
+    [ -n "$php_min" ] \
+        || fatal "no compatibility data for $TARGET (use --force to skip the checks)"
+    if dpkg --compare-versions "$PHP_V" lt "$php_min"; then
+        fatal "$TARGET needs PHP $php_min or later (installed: $PHP_V)"
+    fi
+    if [ "$php_max" != - ] && dpkg --compare-versions "$PHP_V" ge "$php_max"; then
+        fatal "$TARGET does not support PHP $php_max or later (installed: $PHP_V)"
+    fi
+    if dpkg --compare-versions "$CUR_RELEASE" lt "$from_min"; then
+        fatal "$TARGET can only be reached from Moodle $from_min or later (installed: $CUR_RELEASE)"
+    fi
+fi
+
+git diff --quiet && git diff --cached --quiet \
+    || fatal "local changes to tracked files in $MOODLE_PATH: commit or stash them first"
+
+if [ "$ASSUME_YES" != yes ]; then
+    echo "This will upgrade Moodle in $MOODLE_PATH to the latest $TARGET."
+    echo "Make sure you have a backup of the database, $MOODLE_DATA_PATH and $MOODLE_PATH"
+    echo "and that Moodle is in maintenance mode."
+    read -r -p "Continue? [y/N] " answer
+    case "$answer" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
+fi
+
+# --- 1. Git, as per "Git for Administrators" ---------------------------------
+if [ "$TARGET" = "$CUR_GIT_BRANCH" ]; then
+    info "Updating $TARGET: git pull"
+    git pull
+else
+    info "Moving to $TARGET: git fetch, git branch --track, git checkout"
+    git fetch
+    if git show-ref --verify --quiet "refs/heads/$TARGET"; then
+        git checkout "$TARGET"
+        git pull
+    else
+        git branch --track "$TARGET" "origin/$TARGET"
+        git checkout "$TARGET"
+    fi
+fi
+
+# --- 2. file permissions ------------------------------------------------------
+tkl-set-moodle-perms "$PERMS_MODE" -mp "$MOODLE_PATH" -md "$MOODLE_DATA_PATH"
+
+# --- 3. Apache vhost: Moodle >= 5.1 serves 'public/' -------------------------
+VHOST=/etc/apache2/sites-available/moodle.conf
+if [ -f "$MOODLE_PATH/public/index.php" ] && [ -f "$VHOST" ] \
+        && ! grep -q "$MOODLE_PATH/public/" "$VHOST"; then
+    info "Pointing the Apache vhost to $MOODLE_PATH/public/"
+    sed -i "s|$MOODLE_PATH/|$MOODLE_PATH/public/|g" "$VHOST"
+fi
+
+# --- 4. database upgrade -------------------------------------------------------
+info "Running admin/cli/upgrade.php"
+runuser -u www-data -- php admin/cli/upgrade.php --non-interactive
+
+# --- 5. Apache restart (clears opcache) ---------------------------------------
+systemctl restart apache2
+
+# --- 6. record the installed branch/commit ------------------------------------
+if [ -f /etc/turnkey-moodle-release ]; then
+    NEW_RELEASE=$(sed -n "s/^\$release *= *'\([0-9.]*\).*/\1/p" "$(version_php)")
+    sed -i -e '/^MOODLE_TAG=/d' \
+           -e "s/^MOODLE_BRANCH=.*/MOODLE_BRANCH=$TARGET/" \
+           -e "s/^MOODLE_VERSION=.*/MOODLE_VERSION=$NEW_RELEASE/" \
+           -e "s/^MOODLE_COMMIT=.*/MOODLE_COMMIT=$(git rev-parse HEAD)/" \
+           /etc/turnkey-moodle-release
+fi
+
+info "Done: Moodle $(sed -n "s/^\$release *= *'\([^']*\)'.*/\1/p" "$(version_php)")"

@@ -5,7 +5,7 @@ python3-bcrypt      /* Moodle inithook to set admin password */
 
 libdbd-mysql-perl   /* moodle dep */
 libdbi-perl         /* moodle dep */
-php-mysql           /* moodle dep */
+php7.4-mysql        /* moodle dep */
 php7.4-cli          /* moodle dep */
 php7.4-curl         /* moodle dep */
 php7.4-gd           /* moodle dep */

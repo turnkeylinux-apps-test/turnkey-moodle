@@ -1,0 +1,228 @@
+#!/bin/bash
+# tkl-lamp74-to-lamp81 by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.3 - 2026-10-10 07-45-19
+#
+# Switch a TurnKey LAMP appliance from PHP 7.4 (lamp74) to PHP 8.1 (lamp81),
+# both provided by the sury.org repository:
+#  - install the PHP 8.1 equivalent of every installed PHP 7.4 package
+#  - move Apache (mod_php) and the PHP CLI to PHP 8.1
+#  - carry over the TurnKey php.ini settings (memory, upload, input vars...)
+#  - purge every other PHP version, leaving only PHP 8.1
+#
+# Moodle: Moodle 4.0 does not support PHP 8.1. Moodle must already be 4.1 or
+# later (4.1 supports PHP 7.4 - 8.1): the script checks this and stops if an
+# older Moodle is found. It never changes Moodle itself.
+
+set -euo pipefail
+
+FROM=7.4
+TO=8.1
+
+SURY_PREF=/etc/apt/preferences.d/php-sury.pref
+SURY_SOURCES=(/etc/apt/sources.list.d/php.sources /etc/apt/sources.list.d/php.list)
+INI_KEYS=(memory_limit post_max_size upload_max_filesize max_execution_time
+          max_input_vars opcache.interned_strings_buffer opcache.revalidate_freq)
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS=(-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+ASSUME_YES=no
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [-y|--yes] [-h|--help]
+
+Switch this appliance from PHP $FROM (lamp74) to PHP $TO (lamp81, sury.org)
+and purge every other PHP version.
+
+  -y, --yes    do not ask for confirmation
+  -h, --help   show this help
+EOF
+}
+
+info()  { echo "==> $*"; }
+warn()  { echo "WARNING: $*" >&2; }
+fatal() { echo "FATAL: $*" >&2; exit 1; }
+
+pkg_installed() {
+    [ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" = "ii " ]
+}
+
+candidate() {
+    apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2}'
+}
+
+# --- php.ini helpers (same logic as TurnKey common conf/php) ---------------
+ini_get() {
+    local file=$1 key=${2//./\\.}
+    sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\([^[:space:];]*\).*/\1/p" \
+        "$file" | tail -n1
+}
+
+ini_set() {
+    local file=$1 key=$2 val=$3 re=${2//./\\.}
+    if grep -Eq "^;?[[:space:]]*${re}[[:space:]]*=" "$file"; then
+        sed -i -E "s|^;?[[:space:]]*${re}[[:space:]]*=.*|$key = $val|" "$file"
+    else
+        echo "$key = $val" >> "$file"
+    fi
+}
+
+# --- Moodle compatibility ----------------------------------------------------
+# sets MOODLE_PATH and MOODLE_BRANCH (empty if no Moodle is found)
+moodle_detect() {
+    local v
+    MOODLE_PATH=
+    MOODLE_BRANCH=
+    if [ -r /etc/turnkey-moodle-release ]; then
+        MOODLE_PATH=$(sed -n 's/^MOODLE_PATH=//p' /etc/turnkey-moodle-release)
+    fi
+    MOODLE_PATH=${MOODLE_PATH:-/var/www/moodle}
+    for v in "$MOODLE_PATH/public/version.php" "$MOODLE_PATH/version.php"; do
+        if [ -r "$v" ]; then
+            MOODLE_BRANCH=$(sed -n "s/^\$branch *= *'\([0-9]*\)'.*/\1/p" "$v")
+            return
+        fi
+    done
+}
+
+check_moodle() {
+    local branch
+    moodle_detect
+    branch=$MOODLE_BRANCH
+    [ -n "$branch" ] || return 0
+    info "Moodle found in $MOODLE_PATH (branch $branch)"
+    if [ "$branch" -lt 401 ]; then
+        cat >&2 <<EOF
+FATAL: this Moodle release does not support PHP $TO.
+Upgrade Moodle to 4.1 (MOODLE_401_STABLE) first, while still on PHP $FROM,
+then run $(basename "$0") again.
+EOF
+        exit 1
+    fi
+}
+
+# --- main --------------------------------------------------------------------
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -y|--yes)  ASSUME_YES=yes ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 1 ;;
+    esac
+    shift
+done
+
+[ "$(id -u)" -eq 0 ] || fatal "must be run as root"
+pkg_installed "php$FROM-cli" || pkg_installed "libapache2-mod-php$FROM" \
+    || fatal "PHP $FROM is not installed: nothing to do"
+[ -f "$SURY_PREF" ] || fatal "$SURY_PREF not found: sury.org is not configured"
+sury_found=no
+for f in "${SURY_SOURCES[@]}"; do [ -f "$f" ] && sury_found=yes; done
+[ "$sury_found" = yes ] || fatal "sury.org apt source not found"
+
+check_moodle
+
+if [ "$ASSUME_YES" != yes ]; then
+    echo "This will switch PHP $FROM -> $TO and PURGE every other PHP version."
+    read -r -p "Continue? [y/N] " answer
+    case "$answer" in [yY]*) ;; *) echo "Aborted."; exit 1 ;; esac
+fi
+
+# 1. remember the php.ini settings of every PHP $FROM SAPI
+declare -A INI
+for f in /etc/php/"$FROM"/*/php.ini; do
+    [ -f "$f" ] || continue
+    sapi=$(basename "$(dirname "$f")")
+    for k in "${INI_KEYS[@]}"; do
+        v=$(ini_get "$f" "$k")
+        [ -n "$v" ] && INI["$sapi:$k"]=$v
+    done
+done
+
+# 2. pin PHP $TO (instead of $FROM) to sury.org
+info "Pinning PHP $TO packages to sury.org"
+sed -i -e "s/^Package: php${FROM//./\\.}-\*$/Package: php$TO-*/" \
+       -e "s/^Package: libapache2-mod-php${FROM//./\\.}$/Package: libapache2-mod-php$TO/" \
+       "$SURY_PREF"
+grep -q "^Package: php$TO-\*$" "$SURY_PREF" \
+    || fatal "could not update $SURY_PREF"
+apt-get update
+
+# 3. install the PHP $TO equivalent of every installed PHP $FROM package
+NEW=()
+SKIPPED=()
+while read -r pkg; do
+    new=${pkg/php$FROM/php$TO}
+    cand=$(candidate "$new")
+    if [ -n "$cand" ] && [ "$cand" != "(none)" ]; then
+        NEW+=("$new")
+    else
+        SKIPPED+=("$pkg")
+    fi
+done < <(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' \
+             "php$FROM" "php$FROM-*" "libapache2-mod-php$FROM" 2>/dev/null \
+         | awk '$1=="ii" {print $2}')
+[ ${#NEW[@]} -gt 0 ] || fatal "no PHP $TO packages to install"
+info "Installing: ${NEW[*]}"
+apt-get install "${APT_OPTS[@]}" "${NEW[@]}"
+[ ${#SKIPPED[@]} -eq 0 ] \
+    || warn "no PHP $TO equivalent (skipped): ${SKIPPED[*]}"
+
+# 4. Apache and CLI to PHP $TO
+info "Switching Apache and CLI to PHP $TO"
+a2dismod -q "php$FROM" 2>/dev/null || true
+a2enmod -q "php$TO"
+for alt in php phar phar.phar; do
+    if update-alternatives --list "$alt" 2>/dev/null | grep -q "/$alt$TO$"; then
+        update-alternatives --set "$alt" "/usr/bin/$alt$TO"
+    fi
+done
+
+# 5. carry over the php.ini settings
+for f in /etc/php/"$TO"/*/php.ini; do
+    [ -f "$f" ] || continue
+    sapi=$(basename "$(dirname "$f")")
+    for k in "${INI_KEYS[@]}"; do
+        if [ -n "${INI[$sapi:$k]:-}" ]; then
+            echo " - $f: $k = ${INI[$sapi:$k]}"
+            ini_set "$f" "$k" "${INI[$sapi:$k]}"
+        fi
+    done
+done
+
+# 6. purge every other PHP version (only PHP packages may be removed)
+mapfile -t PURGE < <(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' \
+                         'php[0-9]*' 'libapache2-mod-php[0-9]*' 2>/dev/null \
+    | awk '$1=="ii" {print $2}' \
+    | grep -E '^(php[0-9]+\.[0-9]+(-.*)?|libapache2-mod-php[0-9]+\.[0-9]+)$' \
+    | grep -vE "^(php|libapache2-mod-php)${TO//./\\.}(-|$)" || true)
+if [ ${#PURGE[@]} -gt 0 ]; then
+    others=$(apt-get -s purge "${PURGE[@]}" \
+        | awk '/^(Purg|Remv) / {print $2}' \
+        | grep -vE '^(php|libapache2-mod-php)' || true)
+    if [ -n "$others" ]; then
+        warn "PHP $TO is active, but removing the other PHP versions would also"
+        warn "remove these non-PHP packages, so nothing was purged:"
+        echo "$others" >&2
+        exit 1
+    fi
+    info "Purging: ${PURGE[*]}"
+    apt-get purge "${APT_OPTS[@]}" "${PURGE[@]}"
+fi
+
+# 7. Webmin PHP configuration paths (as TurnKey common conf/php)
+WEBMIN_PHP_CONF=/etc/webmin/phpini/config
+if [ -f "$WEBMIN_PHP_CONF" ]; then
+    CLI_INI=$(php -i | sed -n '\|Loaded Configuration File|s|^.*=> ||p')
+    TAB=$(printf '\t')
+    cat > "$WEBMIN_PHP_CONF" <<EOF
+php_ini=${CLI_INI/cli/apache2}=Configuration for mod_php${TAB}\
+${CLI_INI/cli/cgi}=Configuration for scripts run via CGI${TAB}\
+${CLI_INI}=Configuration for command-line scripts
+EOF
+fi
+
+systemctl restart apache2
+info "Done: $(php -r 'echo "PHP ", PHP_VERSION;') is now the only PHP version."
+info "Leftover libraries can be removed with: apt-get autoremove --purge"
+if [ -n "${MOODLE_BRANCH:-}" ]; then
+    info "Moodle on PHP $TO: supported releases are 4.1 to 4.5."
+fi
