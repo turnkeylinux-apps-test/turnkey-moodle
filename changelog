@@ -23,6 +23,11 @@ turnkey-moodle-19.0 (1) turnkey; urgency=low
   * tkl-set-moodle-perms called with the parametrized paths (-mp/-md) at
     build time.
 
+  * tkl-set-moodle-perms 26.10: every .git (core and plugins installed with
+    Git) is left out of the recursive changes and set to root:root 0700, so
+    the web service cannot read it even without the web server rules that
+    hide dot files (Git is run as root, which is not affected).
+
   * Install Moodle via git clone (as per Moodle recommendation), 'moosh'
     removed.
     Special thanks to https://github.com/marcos-mendez &

@@ -1,11 +1,12 @@
 #!/bin/bash
+# tkl-set-moodle-perms by Daniele Lolli (UncleDan) feat. Claude AI - Release 26.10 - 2026-10-10 13-41-32
 # ========================================================
 # Moodle Permissions Manager - Unified Script
 # Branch independent: the permission model is the same for Moodle 4.x and 5.x
 # ========================================================
 
 # SCRIPT RELEASE INFORMATION
-SCRIPT_RELEASE="26.09"
+SCRIPT_RELEASE="26.10"
 SCRIPT_AUTHOR="Daniele Lolli (UncleDan)"
 SCRIPT_LICENSE="GPL-3.0"
 
@@ -136,6 +137,13 @@ show_help() {
     echo "    semanage fcontext -a -t httpd_sys_content_t '/var/www/moodle(/.*)?'"
     echo "    semanage fcontext -a -t httpd_sys_rw_content_t '/var/moodledata(/.*)?'"
     echo "  Check the current state with: getenforce  and  ls -Z"
+    echo ""
+    echo "Git checkouts:"
+    echo "  Every .git (core and plugins installed with Git) is left out of the"
+    echo "  recursive changes and set to root:root 0700 (0600 if it is a file), in"
+    echo "  every mode: the web service cannot read it even if the web server"
+    echo "  rules that hide dot files are missing. Git is meant to be run as root;"
+    echo "  Moodle only checks whether a plugin .git exists, which still works."
     echo ""
     echo "Path resolution:"
     echo "  Any path not supplied on the command line is read from config.php."
@@ -277,6 +285,41 @@ purge_moodle_cache() {
 }
 
 # --------------------------------------------------------
+# GIT CHECKOUTS
+# Every .git (core and plugins installed with Git) is excluded from the
+# recursive changes and made accessible to root only.
+# --------------------------------------------------------
+
+# find over the code tree, skipping every .git: code_find DIR [find expression]
+code_find() {
+    local dir="$1"
+    shift
+    run_cmd find "$dir" -name .git -prune -o "$@"
+}
+
+protect_git() {
+    local g
+    local count=0
+    while IFS= read -r -d '' g; do
+        if [ -d "$g" ]; then
+            run_cmd chown root:root "$g" && run_cmd chmod 0700 "$g" || {
+                echo "❌ ERROR: unable to protect $g"
+                exit $EXIT_CHMOD_FAILED
+            }
+        else
+            run_cmd chown root:root "$g" && run_cmd chmod 0600 "$g" || {
+                echo "❌ ERROR: unable to protect $g"
+                exit $EXIT_CHMOD_FAILED
+            }
+        fi
+        count=$((count + 1))
+    done < <(find "$MOODLE_DIR" -name .git -prune -print0)
+    if [ "$count" -gt 0 ]; then
+        echo "→ .git (core/plugins)    : root:root 0700, not readable by ${WWW_USER} (${count} found)"
+    fi
+}
+
+# --------------------------------------------------------
 # PLUGIN TYPE DIRECTORIES
 # Paths, relative to MOODLE_DIR, that the web UI must be able to write to
 # in order to install, update and uninstall plugins. Everything outside
@@ -304,18 +347,18 @@ apply_semi_harden() {
     check_main_directories
 
     # -- 1. Code tree owned by root, group = web service --
-    echo "→ Ownership MOODLE_DIR   : root:${WWW_GROUP}"
-    run_cmd chown -R "root:${WWW_GROUP}" "$MOODLE_DIR" || {
+    echo "→ Ownership MOODLE_DIR   : root:${WWW_GROUP} (.git excluded)"
+    code_find "$MOODLE_DIR" -exec chown -h "root:${WWW_GROUP}" {} + || {
         echo "❌ ERROR: chown failed on $MOODLE_DIR"
         exit $EXIT_CHOWN_FAILED
     }
 
-    echo "→ MOODLE_DIR permissions : dirs 0755 / files 0644"
-    run_cmd find "$MOODLE_DIR" -type d -exec chmod 0755 {} + || {
+    echo "→ MOODLE_DIR permissions : dirs 0755 / files 0644 (.git excluded)"
+    code_find "$MOODLE_DIR" -type d -exec chmod 0755 {} + || {
         echo "❌ ERROR: chmod 0755 failed on $MOODLE_DIR directories"
         exit $EXIT_CHMOD_FAILED
     }
-    run_cmd find "$MOODLE_DIR" -type f -exec chmod 0644 {} + || {
+    code_find "$MOODLE_DIR" -type f -exec chmod 0644 {} + || {
         echo "❌ ERROR: chmod 0644 failed on $MOODLE_DIR files"
         exit $EXIT_CHMOD_FAILED
     }
@@ -338,11 +381,11 @@ apply_semi_harden() {
     local ptdir
     for ptdir in "${PLUGIN_TYPE_DIRS[@]}"; do
         if [ -d "$MOODLE_DIR/$ptdir" ]; then
-            run_cmd find "$MOODLE_DIR/$ptdir" -type d -exec chmod 2775 {} + || {
+            code_find "$MOODLE_DIR/$ptdir" -type d -exec chmod 2775 {} + || {
                 echo "❌ ERROR: chmod 2775 failed on $MOODLE_DIR/$ptdir"
                 exit $EXIT_CHMOD_FAILED
             }
-            run_cmd find "$MOODLE_DIR/$ptdir" -type f -exec chmod 0664 {} + || {
+            code_find "$MOODLE_DIR/$ptdir" -type f -exec chmod 0664 {} + || {
                 echo "❌ ERROR: chmod 0664 failed on $MOODLE_DIR/$ptdir"
                 exit $EXIT_CHMOD_FAILED
             }
@@ -353,6 +396,9 @@ apply_semi_harden() {
         fi
     done
     echo "   ${found} plugin type dirs made writable, ${skipped} not present on this branch"
+
+    # -- 3b. Git checkouts: root only --
+    protect_git
 
     # -- 4. moodledata: writable by the web service --
     echo "→ Ownership MOODLEDATA   : ${WWW_USER}:${WWW_GROUP}"
@@ -416,18 +462,18 @@ apply_harden() {
     check_main_directories
 
     # -- 1. Code tree owned by root, never writable by the web service --
-    echo "→ Ownership MOODLE_DIR   : root:root"
-    run_cmd chown -R root:root "$MOODLE_DIR" || {
+    echo "→ Ownership MOODLE_DIR   : root:root (.git excluded)"
+    code_find "$MOODLE_DIR" -exec chown -h root:root {} + || {
         echo "❌ ERROR: chown failed on $MOODLE_DIR"
         exit $EXIT_CHOWN_FAILED
     }
 
-    echo "→ MOODLE_DIR permissions : dirs 0755 / files 0644"
-    run_cmd find "$MOODLE_DIR" -type d -exec chmod 0755 {} + || {
+    echo "→ MOODLE_DIR permissions : dirs 0755 / files 0644 (.git excluded)"
+    code_find "$MOODLE_DIR" -type d -exec chmod 0755 {} + || {
         echo "❌ ERROR: chmod 0755 failed on $MOODLE_DIR directories"
         exit $EXIT_CHMOD_FAILED
     }
-    run_cmd find "$MOODLE_DIR" -type f -exec chmod 0644 {} + || {
+    code_find "$MOODLE_DIR" -type f -exec chmod 0644 {} + || {
         echo "❌ ERROR: chmod 0644 failed on $MOODLE_DIR files"
         exit $EXIT_CHMOD_FAILED
     }
@@ -444,6 +490,9 @@ apply_harden() {
             exit $EXIT_CHMOD_FAILED
         }
     fi
+
+    # -- 2b. Git checkouts: root only --
+    protect_git
 
     # -- 3. moodledata: the only tree writable by the web service --
     echo "→ Ownership MOODLEDATA   : ${WWW_USER}:${WWW_GROUP}"
