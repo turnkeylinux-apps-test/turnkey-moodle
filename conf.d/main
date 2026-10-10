@@ -1,5 +1,5 @@
 #!/bin/bash -ex
-# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 07-59-16
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 12-54-27
 #
 # Moodle source code is obtained from Git as per "Git for Administrators":
 # https://docs.moodle.org/en/Git_for_Administrators
@@ -64,7 +64,8 @@ if [ -e "$MOODLE_PATH" ]; then
 fi
 git clone git://git.moodle.org/moodle.git "$MOODLE_PATH"
 cd "$MOODLE_PATH"
-git branch -a
+# --no-pager: on a terminal "git branch" would wait in the pager (less)
+git --no-pager branch -a
 git branch --track "$MOODLE_BRANCH" "origin/$MOODLE_BRANCH"
 git checkout "$MOODLE_BRANCH"
 MOODLE_COMMIT=$(git rev-parse HEAD)
