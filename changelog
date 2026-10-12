@@ -1,4 +1,8 @@
-turnkey-moodle-v4.0.5-upgradable-19.0 (1) turnkey; urgency=low
+turnkey-moodle405up-beta-19.0 (1) turnkey; urgency=low
+
+  * Appliance name set to 'moodle405up-beta' (lowercase letters, digits and hyphens
+    only), as required by buildtasks (iso-release, bt-container,
+    parse-appname-version). 'beta': personal build, not an official release.
 
   * Install Moodle v4.0.5 (legacy 4.0 branch), pinned to tag v4.0.5 on a
     local MOODLE_400_STABLE branch tracking origin. PHP 7.4 from sury.org
@@ -23,6 +27,11 @@ turnkey-moodle-v4.0.5-upgradable-19.0 (1) turnkey; urgency=low
 
   * tkl-set-moodle-perms called with the parametrized paths (-mp/-md) at
     build time.
+
+  * tkl-set-moodle-perms 26.10: every .git (core and plugins installed with
+    Git) is left out of the recursive changes and set to root:root 0700, so
+    the web service cannot read it even without the web server rules that
+    hide dot files (Git is run as root, which is not affected).
 
   * Use php7.4-mysql instead of php-mysql: on Debian 13/Trixie TurnKey no
     longer builds the dummy php-mysql package, so php-mysql pulled in the

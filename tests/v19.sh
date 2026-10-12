@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# v19.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 07-40-19
+# v19.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 13-06-02
 
 result=${TKL_TEST_RESULT:?}
 password=${TKL_TEST_APP_PASS:?}
@@ -41,6 +41,10 @@ grep -Eq 'login/logout\.php\?sesskey=[[:alnum:]]+' "$work/dashboard.html"
 runuser -u www-data -- test ! -w "$pubroot/index.php"
 runuser -u www-data -- test ! -w "$MOODLE_PATH/config.php"
 runuser -u www-data -- test ! -w "$MOODLE_PATH/theme"
+# .git is root only (tkl-set-moodle-perms 26.10)
+git_head="$MOODLE_PATH/.git/HEAD"
+test -f "$git_head"
+runuser -u www-data -- test ! -r "$git_head"
 runuser -u www-data -- touch "$MOODLE_DATA_PATH/.tkl-v19-write-test"
 runuser -u www-data -- rm "$MOODLE_DATA_PATH/.tkl-v19-write-test"
 # upgrade helpers shipped with the appliance
