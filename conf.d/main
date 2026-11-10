@@ -1,5 +1,5 @@
 #!/bin/bash -ex
-# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 12-54-27
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-11-10 16-56-25
 #
 # Moodle source code is obtained from Git as per "Git for Administrators":
 # https://docs.moodle.org/en/Git_for_Administrators
@@ -54,16 +54,14 @@ a2enmod headers
 
 # get the code from Git exactly as per Moodle docs, then pin the release tag
 # https://docs.moodle.org/en/Git_for_Administrators
-# NOTE: the git:// protocol uses TCP port 9418, which is often blocked by
-# firewalls. If the clone fails with "Connection refused" or a timeout, use
-# the official HTTPS mirror suggested by the same docs instead:
-#   git clone https://github.com/moodle/moodle.git
+# NOTE: git.moodle.org is retiring anonymous git:// access and asks to clone
+# the official GitHub repository instead, which is used here over HTTPS
 # abort the build if MOODLE_PATH already exists, then clone into it
 if [ -e "$MOODLE_PATH" ]; then
     echo "FATAL: $MOODLE_PATH already exists" >&2
     exit 1
 fi
-git clone git://git.moodle.org/moodle.git "$MOODLE_PATH"
+git clone https://github.com/moodle/moodle.git "$MOODLE_PATH"
 cd "$MOODLE_PATH"
 # --no-pager: on a terminal "git branch" would wait in the pager (less)
 git --no-pager branch -a
