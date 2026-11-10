@@ -1,5 +1,5 @@
 #!/bin/bash -ex
-# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-10-10 12-54-27
+# main by Daniele Lolli (UncleDan) feat. Claude AI - Release 19.0 - 2026-11-10 17-04-47
 #
 # Moodle source code is obtained from Git as per "Git for Administrators":
 # https://docs.moodle.org/en/Git_for_Administrators
@@ -15,17 +15,44 @@ DB_PASS=$(mcookie)
 ADMIN_USER="admin"
 ADMIN_PASS=turnkey
 # Moodle stable branch to install and track
-# (list: https://github.com/moodle/moodle/branches)
-MOODLE_BRANCH=MOODLE_503_STABLE
-
-# Moodle version from the branch name:
+# (list: https://github.com/moodle/moodle/branches).
+# The Moodle version (major.minor) is derived from the branch name:
 # MOODLE_503_STABLE => 5.3, MOODLE_405_STABLE => 4.5, MOODLE_39_STABLE => 3.9
-MOODLE_BRANCH_NUM=${MOODLE_BRANCH//[!0-9]/}
-if [ ${#MOODLE_BRANCH_NUM} -ge 3 ]; then
-    MOODLE_VERSION=$((10#$MOODLE_BRANCH_NUM / 100)).$((10#$MOODLE_BRANCH_NUM % 100))
-else
-    MOODLE_VERSION=$((MOODLE_BRANCH_NUM / 10)).$((MOODLE_BRANCH_NUM % 10))
+#
+# To install an exact release (a tag) instead of the latest commit of the
+# branch, use the same structure as the moodle405up-beta appliance:
+#   1. replace the MOODLE_BRANCH and MOODLE_VERSION lines with the tag:
+#        MOODLE_VERSION=5.3.1      # a tag at https://github.com/moodle/moodle/tags, without "v"
+#        MOODLE_TAG="v${MOODLE_VERSION}"
+#      keep MOODLE_MAJOR / MOODLE_MINOR, and derive the branch from the version
+#      instead of checking it, replacing the 'test "$MOODLE_BRANCH_EXPECTED" ...'
+#      line with:
+#        MOODLE_BRANCH=$MOODLE_BRANCH_EXPECTED
+#      (5.3.1 => MOODLE_503_STABLE, 4.0.5 => MOODLE_400_STABLE, 3.9.25 => MOODLE_39_STABLE)
+#   2. after "git checkout", pin the local branch to the tag (the branch still
+#      tracks origin, so a later "git pull" upgrades within the branch):
+#        git merge-base --is-ancestor "$MOODLE_TAG" "origin/$MOODLE_BRANCH"
+#        git reset --hard "$MOODLE_TAG"
+#        test "$(git rev-parse HEAD)" = "$(git rev-parse "${MOODLE_TAG}^{commit}")"
+#      and drop the "HEAD = origin/$MOODLE_BRANCH" check, which no longer holds
+#   3. add MOODLE_TAG=$MOODLE_TAG to /etc/turnkey-moodle-release
+MOODLE_BRANCH=MOODLE_503_STABLE
+MOODLE_VERSION=$(sed -nE 's/^MOODLE_([0-9])([0-9])_STABLE$/\1.\2/p; s/^MOODLE_([0-9])0?([0-9]{1,2})_STABLE$/\1.\2/p' <<<"$MOODLE_BRANCH")
+MOODLE_MAJOR=${MOODLE_VERSION%%.*}
+MOODLE_MINOR=${MOODLE_VERSION#*.}; MOODLE_MINOR=${MOODLE_MINOR%%.*}
+if [ -z "$MOODLE_VERSION" ]; then
+    echo "FATAL: $MOODLE_BRANCH is not a MOODLE_xxx_STABLE branch name" >&2
+    exit 1
 fi
+# check: the branch name rebuilt from the version must match MOODLE_BRANCH
+if [ "$MOODLE_MAJOR" -ge 4 ]; then
+    MOODLE_BRANCH_EXPECTED=$(printf 'MOODLE_%d%02d_STABLE' "$MOODLE_MAJOR" "$MOODLE_MINOR")
+else
+    MOODLE_BRANCH_EXPECTED="MOODLE_${MOODLE_MAJOR}${MOODLE_MINOR}_STABLE"
+fi
+test "$MOODLE_BRANCH_EXPECTED" = "$MOODLE_BRANCH"
+# value of $branch in version.php (MOODLE_503_STABLE => '503')
+MOODLE_BRANCH_NUM=${MOODLE_BRANCH//[!0-9]/}
 echo "Moodle branch $MOODLE_BRANCH => version $MOODLE_VERSION"
 
 # Moodle < 5.1 has no "public/" directory: Apache must serve the webroot
@@ -53,23 +80,31 @@ a2enmod headers
 
 # get the code from Git exactly as per Moodle docs
 # https://docs.moodle.org/en/Git_for_Administrators
-# NOTE: the git:// protocol uses TCP port 9418, which is often blocked by
-# firewalls. If the clone fails with "Connection refused" or a timeout, use
-# the official HTTPS mirror suggested by the same docs instead:
-#   git clone https://github.com/moodle/moodle.git
+# NOTE: git.moodle.org is retiring anonymous git:// access and asks to clone
+# the official GitHub repository instead, which is used here over HTTPS
 # abort the build if MOODLE_PATH already exists, then clone into it
 if [ -e "$MOODLE_PATH" ]; then
     echo "FATAL: $MOODLE_PATH already exists" >&2
     exit 1
 fi
-git clone git://git.moodle.org/moodle.git "$MOODLE_PATH"
+git clone https://github.com/moodle/moodle.git "$MOODLE_PATH"
 cd "$MOODLE_PATH"
 # --no-pager: on a terminal "git branch" would wait in the pager (less)
 git --no-pager branch -a
 git branch --track "$MOODLE_BRANCH" "origin/$MOODLE_BRANCH"
 git checkout "$MOODLE_BRANCH"
 MOODLE_COMMIT=$(git rev-parse HEAD)
-echo "Moodle $MOODLE_BRANCH => commit $MOODLE_COMMIT"
+# checks: HEAD is the latest commit of the branch, the local branch tracks
+# origin, and version.php belongs to the same branch and version
+test "$MOODLE_COMMIT" = "$(git rev-parse "origin/$MOODLE_BRANCH")"
+test "$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')" = "origin/$MOODLE_BRANCH"
+# version.php is in public/ from Moodle 5.1
+MOODLE_VERSION_PHP=version.php
+[ -f public/version.php ] && MOODLE_VERSION_PHP=public/version.php
+grep -Eq "^\\\$branch *= *'${MOODLE_BRANCH_NUM}';" "$MOODLE_VERSION_PHP"
+grep -Eq "^\\\$release *= *'${MOODLE_VERSION//./\\.}[.+ ]" "$MOODLE_VERSION_PHP"
+echo "Moodle $MOODLE_BRANCH => commit $MOODLE_COMMIT," \
+    "release $(sed -nE "s/^\\\$release *= *'([^']*)'.*/\1/p" "$MOODLE_VERSION_PHP")"
 
 # record the installed branch/commit, so it can be checked later (e.g. by tests)
 cat > /etc/turnkey-moodle-release <<EOF
